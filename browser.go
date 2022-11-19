@@ -275,7 +275,7 @@ func (br *Browser) cache(u string) (*CacheItem, error) {
 	}
 	br.internal.rw.Unlock()
 	defer item.resourceMutex.Unlock()
-	if _, err := br.fetch(u, item); err != nil {
+	if _, err := br.fetch(u, item, false); err != nil {
 		return nil, err
 	} else {
 		//seccion critica para item
@@ -299,7 +299,7 @@ func (br *Browser) cache(u string) (*CacheItem, error) {
 	}
 }
 
-func (br *Browser) fetch(u string, item *CacheItem) (io.ReadCloser, error) {
+func (br *Browser) fetch(u string, item *CacheItem, isRes bool) (interface{}, error) {
 	parsedURL, err := url.Parse(u)
 	if err != nil {
 		return nil, err
@@ -371,8 +371,15 @@ func (br *Browser) fetch(u string, item *CacheItem) (io.ReadCloser, error) {
 	}
 	if item != nil {
 		item.err = nil
-		item.resource = response.Body
+		if isRes {
+			item.resource = response
+		} else {
+			item.resource = response.Body
+		}
 		item.isLoaded = false
+	}
+	if isRes {
+		return response, nil
 	}
 	return response.Body, nil
 }
@@ -386,7 +393,16 @@ func (br *Browser) Get(u string) (interface{}, error) {
 }
 
 func (br *Browser) Download(u string) (io.ReadCloser, error) {
-	return br.fetch(u, nil)
+	reader, err := br.fetch(u, nil, false)
+	return reader.(io.ReadCloser), err
+}
+
+func (br *Browser) DownloadWithResponse(u string) (*http.Response, error) {
+	res, err := br.fetch(u, nil, true)
+	if res != nil {
+		return res.(*http.Response), err
+	}
+	return nil, fmt.Errorf("response is nil")
 }
 
 type FormatError struct {

@@ -5,6 +5,7 @@ import (
 	"io"
 	"io/ioutil"
 	"log"
+	"net/http"
 	"os"
 	"strings"
 	"sync"
@@ -118,7 +119,7 @@ func (w *DownloadWorker) Prepare() {
 	w.manga.SetURI(folderURI)
 }
 
-const DOWNLOAD_THREADS int = 1
+const DOWNLOAD_THREADS int = 8
 
 func (w *DownloadWorker) DownloadChapter(chapter *ChapterData) {
 	images := chapter.GetImages()
@@ -206,28 +207,48 @@ func (w *DownloadWorker) DownloadImage(chapter *ChapterData, data *ImageData, re
 	controller.uiDownloadList.item.Content.Refresh()
 	time.Sleep(333 * time.Millisecond)*/
 	fileURI := resolver.Resolve(data.imageId, ".webp")
-	if exists, err := storage.Exists(fileURI); err == nil {
-		if !data.IsDownloaded() {
-			if exists {
-				if st, err := os.Stat(fileURI.Path()); err != nil {
-					log.Panic(err)
-				} else if st.Size() > 0 {
-					w.manga.CountOne()
-					chapter.CountOne()
-					data.SetIsDownloaded(true)
-					return
-				} else {
-					log.Printf("[DownloadImage] uri='%s' size='%d'\n\r", fileURI.Path(), st.Size())
+	log.Printf("GET PAGE '%s'", data.imageURL)
+	page := ForcePage(data.imageURL)
+	imageURL, _ := page.Find("meta[property=\"og:image\"]").Attr("content")
+	var reader io.ReadCloser
+	var err error
+	log.Printf("Download name %d '%s'\n\r", data.imageId, data.imageURL)
+	var response *http.Response
+	response, err = controller.browser.DownloadWithResponse(imageURL)
+	if response != nil && err == nil {
+		//Test if downloaded comparing response data
+		if exists, err := storage.Exists(fileURI); err == nil {
+			if !data.IsDownloaded() {
+				if exists {
+					if st, err := os.Stat(fileURI.Path()); err != nil {
+						log.Panic(err)
+					} else if st.Size() > 0 {
+						if response.ContentLength > 0 {
+							if response.ContentLength == st.Size() {
+								w.manga.CountOne()
+								chapter.CountOne()
+								data.SetIsDownloaded(true)
+								controller.uiDownloadList.Refresh()
+								return
+							}
+							//No es el mismo
+							log.Printf("[DownloadImage] uri='%s' size='%d'\n\r", fileURI.Path(), st.Size())
+						} else {
+							w.manga.CountOne()
+							chapter.CountOne()
+							data.SetIsDownloaded(true)
+							controller.uiDownloadList.Refresh()
+							return
+						}
+					} else {
+						log.Printf("[DownloadImage] uri='%s' size='%d'\n\r", fileURI.Path(), st.Size())
+					}
 				}
 			}
+		} else {
+			log.Panic(err)
 		}
-		log.Printf("GET PAGE '%s'", data.imageURL)
-		page := ForcePage(data.imageURL)
-		imageURL, _ := page.Find("meta[property=\"og:image\"]").Attr("content")
-		var reader io.ReadCloser
-		var err error
-		log.Printf("Download name %d '%s'\n\r", data.imageId, data.imageURL)
-		reader, err = controller.browser.Download(imageURL)
+		reader = response.Body
 		if err == nil {
 			defer reader.Close()
 			data.SetURI(fileURI)
@@ -279,8 +300,6 @@ func (w *DownloadWorker) DownloadImage(chapter *ChapterData, data *ImageData, re
 		}
 		data.SetError(err)
 		log.Println(err)
-	} else {
-		log.Panic(err)
 	}
 }
 
